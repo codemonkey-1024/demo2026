@@ -1,0 +1,91 @@
+# Relative paths; run commands from the repository root.
+seed: 1024
+
+hydra:
+  run:
+    dir: runs/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: false
+
+datasets:
+  _target_: queryflow.datasets.QADataset
+  cfgs:
+    root: data/raw/train
+    train_root: data/raw/train
+    valid_root: data/raw/eval
+    force_rebuild: false
+    text_emb_model_cfgs:
+      _target_: queryflow.text_emb_models.BaseTextEmbModel
+      text_emb_model_name: ${oc.env:QUERYFLOW_TEXT_MODEL,sentence-transformers/all-mpnet-base-v2}
+      normalize: false
+      batch_size: 16
+      query_instruct: null
+      passage_instruct: null
+      model_kwargs: null
+  train_names:
+    - 2wikimultihopqa_train_train_00000
+    - hotpotqa_train_train_00000
+    - musique_train_train_00019
+  valid_names: [wiki, hotpotqa, musique, CQA_val]
+  init_datasets: false
+  feat_dim: 768
+  max_datasets_in_memory: 1
+  data_loading_workers: 0
+
+model:
+  _target_: queryflow.models.GNNRetriever
+  entity_model:
+    _target_: queryflow.ultra.models.QueryflowNBFNet
+    input_dim: 512
+    hidden_dims: [512, 512, 512, 512, 512, 512]
+    message_func: distmult
+    aggregate_func: sum
+    short_cut: true
+    layer_norm: true
+    query_shift_dropout: 0.0
+    query_shift_temperature: 1.0
+    activation_checkpointing: true
+
+doc_ranker:
+  _target_: queryflow.doc_rankers.SoftplusIDFWeightedRanker
+
+task:
+  strict_negative: true
+  metric: [mrr, hits@1, hits@3, hits@5, hits@10, hits@20, hits@50]
+  losses:
+    - name: ent_pairwise_loss
+      loss:
+        _target_: queryflow.losses.WeightedPairwiseLoss
+        hard_negatives: 64
+        margin: 0.5
+        temperature: 1.0
+      cfg: {weight: 0.2, is_doc_loss: false}
+    - name: doc_lambdarank_loss
+      loss:
+        _target_: queryflow.losses.LambdaRankLoss
+        top_k: 30
+        sigma: 1.0
+        pair_reduction: positive_mean
+      cfg: {weight: 0.8, is_doc_loss: true}
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-5
+
+train:
+  batch_size: 1
+  num_epoch: 1
+  batch_per_epoch: null
+  log_interval: 100
+  save_best_only: true
+  save_pretrained: false
+  do_eval: true
+  selection_metric: doc_fr10
+  timeout: 60
+  init_entities_weight: true
+  init_checkpoint: null
+  checkpoint: null
+  early_stopping_patience: 0
+  max_grad_norm: 1.0
+  record_training_sample_ids: false
+  evidence_labels_dir: data/evidence_labels
